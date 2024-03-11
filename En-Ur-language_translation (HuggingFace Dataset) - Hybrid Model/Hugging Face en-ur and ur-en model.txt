@@ -1,0 +1,52 @@
+
+Helsinki-NLP/opus-mt-en-ur
+Translation
+
+source group: English
+
+target group: Urdu
+
+OPUS readme: eng-urd
+
+model: transformer-align
+
+----------------------------------------------------------------------------------------
+
+Helsinki-NLP/opus-mt-hi-ur
+
+----------------------------------------------------------------------------------------
+
+Helsinki-NLP/opus-mt-ur-en
+Translation
+
+source group: Urdu
+
+target group: English
+
+OPUS readme: urd-eng
+
+model: transformer-align
+
+----------------------------------------------------------------------------------------
+
+samiulhaq/iwslt-bt-en-ur
+Translation
+
+source group: English
+
+target group: Urdu
+
+model: transformer
+
+----------------------------------------------------------------------------------------
+
+samiulhaq/iwslt-bt-ur-en
+Translation
+
+source group: English
+
+target group: Urdu
+
+model: transformer
+
+----------------------------------------------------------------------------------------

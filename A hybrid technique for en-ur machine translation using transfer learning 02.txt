@@ -1,0 +1,107 @@
+# Install necessary packages
+# pip install keras
+# pip install transformers
+# !pip install datasets transformers[sentencepiece] sacrebleu -q
+# pip install datasets transformers[sentencepiece] sacrebleu
+# pip install datasets
+# pip install -U datasets
+# pip install fsspec==2023.9.2
+# pip install sentencepiece
+
+import itertools
+import numpy as np
+import tensorflow as tf
+import transformers
+from datasets import load_dataset
+from transformers import AutoTokenizer, TFAutoModelForSeq2SeqLM, AdamWeightDecay
+from transformers import Trainer, TrainingArguments
+
+# Load the dataset
+raw_datasets = load_dataset('HaiderSultanArc/MT-Urdu-English')
+
+# Take a small subset for testing/debugging
+small_en_ur_train_dataset = raw_datasets['train'].shuffle(seed=42).select([i for i in range(500)])  # Adjust the number as needed
+
+# Define maximum lengths
+max_input_length = 64
+max_target_length = 64
+
+# Load tokenizer
+tokenizer = AutoTokenizer.from_pretrained('facebook/mbart-large-50-one-to-many-mmt')
+
+# Example sentence for testing tokenization
+sample_input_sentence = "This is a sample sentence for testing tokenization."
+
+# Print the tokenization output
+print("tokenizer(sample_input_sentence, max_length=max_input_length, truncation=True)")
+print(tokenizer(sample_input_sentence, max_length=max_input_length, truncation=True))
+
+# Load the pre-trained model
+model_checkpoint = 'facebook/mbart-large-50-one-to-many-mmt'
+
+# Specify source and target languages
+source_lang = "en"
+target_lang = "ur"
+
+# Define preprocess function
+def preprocess_function(examples):
+    inputs = examples[source_lang]
+    targets = examples[target_lang]
+
+    # Tokenize inputs
+    model_inputs = tokenizer(inputs, max_length=max_input_length, truncation=True)
+
+    # Tokenize targets
+    labels = tokenizer(targets, max_length=max_target_length, truncation=True)
+
+    # Add labels to model inputs
+    model_inputs["labels"] = labels["input_ids"]
+    return model_inputs
+
+# Apply preprocess function to train dataset
+tokenized_train_datasets = small_en_ur_train_dataset.map(preprocess_function, batched=True)
+
+# Specify the model configuration for TFAutoModelForSeq2SeqLM
+config = TFAutoModelForSeq2SeqLM.from_pretrained(model_checkpoint).config
+
+# Instantiate the transformer model
+transformer_model = TFAutoModelForSeq2SeqLM.from_pretrained(model_checkpoint, config=config)
+
+# Compile the model
+transformer_model.compile(optimizer=AdamWeightDecay(), loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True), metrics=['accuracy'])
+
+# Reduce the batch size to fit into GPU memory
+batch_size = 4  # Adjust the batch size based on available GPU memory
+
+# Convert tokenized datasets to TensorFlow datasets
+columns_to_remove = ["en", "ur"]  # Adjust as needed
+tf_train_datasets = tokenized_train_datasets.remove_columns(columns_to_remove)
+
+tf_train_datasets.set_format(type='tensorflow', columns=['input_ids', 'attention_mask', 'labels'])
+
+num_batches_per_epoch = len(tf_train_datasets) // batch_size
+
+num_epochs = 2
+
+# Define the training arguments
+training_args = TrainingArguments(
+    per_device_train_batch_size=batch_size,
+    output_dir="./en_ur_model",
+    overwrite_output_dir=True,
+    save_steps=num_batches_per_epoch,
+    save_total_limit=2,
+    num_train_epochs=num_epochs,
+)
+
+# Create the Trainer
+trainer = Trainer(
+    model=transformer_model,
+    args=training_args,
+    train_dataset=tf_train_datasets,
+)
+
+# Train the model using the Trainer
+trainer.train()
+
+# Save the model
+transformer_model.save("en-ur_transformer_model.h5")

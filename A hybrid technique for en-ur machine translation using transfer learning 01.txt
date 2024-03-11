@@ -1,0 +1,410 @@
+
+# Install necessary packages
+# pip install keras
+# pip install transformers
+# !pip install datasets transformers[sentencepiece] sacrebleu -q
+# pip install datasets transformers[sentencepiece] sacrebleu
+# pip install datasets
+# pip install -U datasets
+# pip install fsspec==2023.9.2
+# pip install sentencepiece
+
+import itertools
+import numpy as np
+import tensorflow as tf
+import transformers
+from datasets import load_dataset
+from transformers import AutoTokenizer, TFAutoModelForSeq2SeqLM, AdamWeightDecay
+from tensorflow.keras.layers import Conv1D, LSTM, Dense, Input, Concatenate, GlobalMaxPooling1D, RepeatVector, TimeDistributed, Flatten, Embedding
+from transformers import Trainer, TrainingArguments
+from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# Load the dataset
+raw_datasets = load_dataset('HaiderSultanArc/MT-Urdu-English')
+
+# Take a small subset for testing/debugging
+small_en_ur_train_dataset = raw_datasets['train'].shuffle(seed=42).select([i for i in range(500)])  # Adjust the number as needed
+
+# Define maximum lengths
+max_input_length = 64
+max_target_length = 64
+
+# Load tokenizer
+tokenizer = AutoTokenizer.from_pretrained('facebook/mbart-large-50-one-to-many-mmt')
+
+# Example sentence for testing tokenization
+sample_input_sentence = "This is a sample sentence for testing tokenization."
+
+# Print the tokenization output
+print("tokenizer(sample_input_sentence, max_length=max_input_length, truncation=True)")
+print(tokenizer(sample_input_sentence, max_length=max_input_length, truncation=True))
+
+# Load the pre-trained model
+model_checkpoint = 'facebook/mbart-large-50-one-to-many-mmt'
+
+# Specify source and target languages
+source_lang = "en"
+target_lang = "ur"
+
+# Define preprocess function
+def preprocess_function(examples):
+    inputs = examples[source_lang]
+    targets = examples[target_lang]
+
+    # Tokenize inputs
+    model_inputs = tokenizer(inputs, max_length=max_input_length, truncation=True)
+
+    # Tokenize targets
+    labels = tokenizer(targets, max_length=max_target_length, truncation=True)
+
+    # Add labels to model inputs
+    model_inputs["labels"] = labels["input_ids"]
+    return model_inputs
+
+# Apply preprocess function to train dataset
+tokenized_train_datasets = small_en_ur_train_dataset.map(preprocess_function, batched=True)
+
+# Print keys of the first example in tokenized_train_datasets
+print("Keys of the first example:", tokenized_train_datasets[0].keys())
+
+# Print the shape of the "input_ids" tensor for the first example
+input_ids_shape = np.array(tokenized_train_datasets["input_ids"][0]).shape
+print("Shape of the 'input_ids' tensor for the first example:", input_ids_shape)
+
+# Print some sample data
+print("Sample input_ids:", tokenized_train_datasets["input_ids"][0])
+print("Sample labels:", tokenized_train_datasets["labels"][0])
+
+# Extract text from labels
+decoder_inputs = tokenized_train_datasets['labels']
+
+# Convert "labels" to a TensorFlow tensor
+decoder_inputs_tensor = tf.ragged.constant(tokenized_train_datasets["labels"], dtype=tf.int32)
+
+# Convert ragged tensor to dense tensor
+decoder_inputs_tensor = decoder_inputs_tensor.to_tensor(default_value=0)  # Use 0 as the default value, you can adjust it based on your needs
+
+# Flatten the tensor
+flat_decoder_inputs = tf.reshape(decoder_inputs_tensor, shape=[-1])
+
+# Calculate the number of batches needed
+num_batches = len(flat_decoder_inputs) // max_target_length
+
+# Reshape to match the expected shape
+decoder_inputs_expanded = tf.reshape(decoder_inputs_tensor[:num_batches * max_target_length], shape=[-1, max_target_length])
+
+print("Decoder inputs shape before reshape:", decoder_inputs_expanded.shape)
+
+# Reshape to match the expected shape
+decoder_inputs_expanded = tf.reshape(decoder_inputs_expanded, shape=[-1, max_target_length])
+
+# Print the shape after reshape
+print("Decoder inputs shape after reshape:", decoder_inputs_expanded.shape)
+
+# Define CNN and RNN components
+embedding_dim = 128
+
+# input shape for the "conv1d" layer
+# The layer expects an input shape with a minimum dimension of 3,
+#  it's receiving an input with a shape of (None, None, 1) as expected.
+
+# Define the input shapes for the CNN and RNN components
+cnn_input_shape = (max_input_length, 128)
+
+rnn_input_shape = (max_input_length, embedding_dim)
+
+# Reshape CNN input to add a third dimension
+# cnn_input = Input(shape=(max_input_length, 128), name="cnn_input")
+
+# CNN Component
+cnn_input = Input(shape=cnn_input_shape, name="cnn_input")
+
+cnn_output = Conv1D(filters=64, kernel_size=3, activation='relu')(cnn_input)
+
+print("Shape of cnn_output:", cnn_output.shape)
+
+# After applying Conv1D, the shape of cnn_output is (None, 64, 126, 64).
+# We need to reshape it to (batch_size, sequence_length, input_dim) before applying GlobalMaxPooling1D.
+
+# Reshape CNN output before pooling
+cnn_output_reshaped = tf.reshape(cnn_output, shape=(-1, max_input_length, 64))
+
+# Apply GlobalMaxPooling1D
+cnn_output_pooled = GlobalMaxPooling1D()(cnn_output_reshaped)
+
+# Print the shape after pooling
+print("Shape of cnn_output_pooled after pooling:", cnn_output_pooled.shape)
+
+# Reshape CNN output before pooling
+cnn_output_reshaped = tf.reshape(cnn_output, shape=(-1, max_input_length, 64))
+
+# Apply GlobalMaxPooling1D
+cnn_output_pooled = GlobalMaxPooling1D()(cnn_output_reshaped)
+
+print("Shape of cnn_output_pooled:", cnn_output_pooled.shape)
+
+# Reshape CNN output before repeating
+cnn_output_repeated = RepeatVector(max_input_length)(cnn_output_pooled)
+
+# Add a singleton dimension
+cnn_output_repeated = tf.expand_dims(cnn_output_repeated, axis=-1)
+
+# cnn_output_reshaped is expected to have a shape of (None, max_input_length, 64) after the reshape operation.
+# Before applying tf.squeeze, you are reshaping it to (None, max_input_length, 64), which seems correct.
+# Shape of cnn_output_repeated before squeeze: (None, 64, 64)
+
+# Print the shape before squeezing
+print("Shape of cnn_output_repeated before squeeze:", cnn_output_repeated.shape)
+
+# Add a singleton dimension
+cnn_output_repeated = tf.expand_dims(cnn_output_repeated, axis=-1)
+
+# Squeeze the vector
+cnn_output_repeated = tf.squeeze(cnn_output_repeated, axis=-1)
+
+# the layer "tf.squeeze" expects an input with shape (None, 64, 64, 1),
+# but the shape of cnn_output_repeated is (None, 64, 64).
+
+# Print the shape after squeezing
+print("Shape of cnn_output_repeated after squeeze:", cnn_output_repeated.shape)
+
+# RNN Component:
+
+# Concatenate or combine CNN and RNN outputs
+
+# when you concatenate cnn_output_pooled and rnn_output.
+# The shapes of these tensors need to be compatible along the specified axis (axis=-1)
+
+# cnn_output_pooled: Shape is (None, 64), which indicates a batch dimension and a sequence length of 64
+
+# rnn_output: Shape is (None, 64, 64),
+# which indicates a batch dimension, a sequence length of 64, and an output dimension of 64.
+
+# RNN input shape
+rnn_input_tensor = Input(shape=rnn_input_shape, name="rnn_input")
+
+rnn_output = LSTM(units=64, return_sequences=False)(rnn_input_tensor)
+
+print("Shape of rnn_output:", rnn_output.shape)
+
+# cnn_input_tensor with a shape of (max_input_length, 128),
+# but the Conv1D layer expects input with shape (sequence_length, features).
+
+# Define the input tensors for the final_model
+cnn_input_tensor = Input(shape=(max_input_length, 128), name="cnn_input")
+
+final_model_input = Input(shape=(max_target_length,), name="final_model_input")
+
+print("Shape of cnn_input:", cnn_input_tensor.shape)
+print("Shape of rnn_input_tensor:", rnn_input_tensor.shape)
+print("Shape of final_model_input:", final_model_input.shape)
+
+# Get the predicted output
+
+# Convert "labels" to a TensorFlow tensor
+labels_tensor = tf.ragged.constant(tokenized_train_datasets["labels"], dtype=tf.int32)
+
+# Convert "input_ids" to a TensorFlow tensor
+input_ids_tensor = tf.ragged.constant(tokenized_train_datasets["input_ids"], dtype=tf.int32)
+
+# Convert "attention_mask" to a TensorFlow tensor
+attention_mask_tensor = tf.ragged.constant(tokenized_train_datasets["attention_mask"], dtype=tf.int32)
+
+# Convert tf.ragged.constant to Python list
+input_ids_list = input_ids_tensor.to_list()
+
+# you are trying to convert the entire decoder_inputs tensor, which has a ragged structure,
+# into a NumPy array directly. Instead, you should convert decoder_inputs_tensor,
+#  which is already a dense tensor, to a NumPy array and then convert it to a list.
+#  The corrected line uses decoder_inputs_tensor directly.
+flat_decoder_inputs_list = [list(example.numpy()) for example in decoder_inputs_tensor]
+
+# Pad sequences
+padded_en_input = pad_sequences(input_ids_list, maxlen=max_input_length, padding='post', truncating='post')
+
+padded_ur_target = pad_sequences([flat_decoder_inputs_list], maxlen=max_target_length, padding='post', truncating='post')[0]
+
+# Convert to TensorFlow tensor
+padded_en_input_tensor = tf.constant(padded_en_input, dtype=tf.int32)
+padded_ur_target_tensor = tf.constant(padded_ur_target, dtype=tf.int32)
+
+# Calculate the attention mask
+attention_mask = tf.cast(tf.math.not_equal(padded_en_input_tensor, 0), tf.int32)
+
+# Update the transformer_model_inputs dictionary
+transformer_model_inputs = {
+    "input_ids": padded_en_input_tensor,
+    "attention_mask": attention_mask,  # Use the calculated attention_mask
+    "labels": padded_ur_target_tensor,
+}
+
+# Print the shapes for debugging
+print("Shapes for debugging:")
+print("Padded English input shape:", padded_en_input_tensor.shape)
+print("Padded Urdu target shape:", padded_ur_target_tensor.shape)
+
+# Define CNN and RNN components using the input tensors
+cnn_output = Conv1D(filters=64, kernel_size=3, activation='relu')(cnn_input)  # Use cnn_input here
+
+# Reshape CNN output before pooling
+cnn_output_reshaped = tf.reshape(cnn_output, shape=(-1, max_input_length, 64))
+
+# Apply GlobalMaxPooling1D
+cnn_output_pooled = GlobalMaxPooling1D()(cnn_output_reshaped)
+
+# Reshape CNN output before repeating
+cnn_output_repeated = RepeatVector(max_input_length)(cnn_output_pooled)
+
+# Add a singleton dimension
+cnn_output_repeated = tf.expand_dims(cnn_output_repeated, axis=-1)
+
+# Squeeze the vector
+cnn_output_repeated = tf.squeeze(cnn_output_repeated, axis=-1)
+
+# Reshape rnn_output to match the last dimension of cnn_output_reshaped
+rnn_output_reshaped = RepeatVector(max_input_length)(rnn_output)
+
+# Reshape rnn_output_reshaped to match the dimensions of cnn_output_reshaped
+rnn_output_reshaped = tf.reshape(rnn_output_reshaped, shape=(-1, max_input_length, 64))
+
+# Shape of cnn_output_reshaped
+print("Shape of cnn_output_reshaped:", cnn_output_reshaped.shape)
+
+print("Shape of cnn_output_repeated:", cnn_output_repeated.shape)
+
+# Shape of rnn_output
+print("Shape of rnn_output:", rnn_output.shape)
+
+print("Shape of rnn_output_reshaped:", rnn_output_reshaped.shape)
+
+# Concatenate or combine CNN and RNN outputs
+combined_output = Concatenate()([cnn_output_reshaped, rnn_output_reshaped])
+
+# Specify the model configuration for TFAutoModelForSeq2SeqLM
+config = transformers.AutoConfig.from_pretrained(model_checkpoint)
+
+# Instantiate the transformer model
+transformer_model = TFAutoModelForSeq2SeqLM.from_pretrained(model_checkpoint, config=config)
+
+# Flatten the logits for the Dense layer
+logits_flattened = Flatten()(combined_output)
+
+# You may need to reshape logits based on your specific model architecture
+# (e.g., if it's a sequence-to-sequence model, you might need to flatten or reshape it)
+# For example, assuming logits has shape [batch_size, seq_length, vocab_size]
+logits_reshaped = tf.reshape(logits_flattened, [-1, max_target_length, transformer_model.config.vocab_size])
+
+# Use Embedding layer for vocabulary projection
+embedding_dim = 128
+embedding_layer = Embedding(input_dim=transformer_model.config.vocab_size, output_dim=embedding_dim, name="output_layer")(logits_reshaped)
+
+# Define the final dense layer
+output_layer = Dense(transformer_model.config.vocab_size, activation='softmax')(combined_output)
+
+# Create a new model using the CNN and RNN inputs and the output_layer
+full_model = tf.keras.Model(inputs=[cnn_input, rnn_input_tensor, final_model_input], outputs=output_layer, name="en_text_to_urdu_model")
+
+# Compile the model
+full_model.compile(optimizer=AdamWeightDecay(), loss=tf.keras.losses.CategoricalCrossentropy(), metrics=['accuracy'])
+
+# Reduce the batch size to fit into GPU memory
+batch_size = 4  # Adjust the batch size based on available GPU memory
+
+def batch_generator(tokenized_train_datasets, max_input_length, max_target_length):
+    for example in tokenized_train_datasets:
+        # Tokenize inputs
+        transformer_model_inputs = tokenizer(example[source_lang], max_length=max_input_length, truncation=True)
+
+        # Tokenize targets
+        labels = tokenizer(example[target_lang], max_length=max_target_length, truncation=True)
+
+        # Pad sequences for inputs
+        padded_en_input_cnn = \
+            pad_sequences([transformer_model_inputs['input_ids']], maxlen=max_input_length, padding='post',
+                          truncating='post')[0]
+
+        # Update the padding for RNN input
+        padded_en_input_rnn = \
+            pad_sequences([transformer_model_inputs['input_ids']], maxlen=max_input_length, padding='post',
+                          truncating='post')[0]
+
+        # Pad sequences for targets
+        flat_decoder_inputs_list = [list(tf.reshape(decoder_input, shape=[-1]).numpy()) for decoder_input in decoder_inputs_tensor]
+        padded_ur_target = pad_sequences(flat_decoder_inputs_list, maxlen=max_target_length, padding='post', truncating='post')[0]
+
+        yield (
+            {
+                'cnn_input': np.expand_dims(padded_en_input_cnn, axis=0),
+                'rnn_input': np.expand_dims(padded_en_input_rnn, axis=0),
+                'final_model_input': np.expand_dims(padded_ur_target, axis=0),
+            },
+            np.expand_dims(padded_ur_target, axis=0)
+        )
+
+# Print the shapes within the generator for debugging
+for batch in batch_generator(tokenized_train_datasets, max_input_length, max_target_length):
+    inputs, labels = batch
+    print("Batch shapes for debugging:")
+    print("CNN input shape:", inputs['cnn_input'].shape)
+    print("RNN input shape:", inputs['rnn_input'].shape)
+    print("Final model input shape:", inputs['final_model_input'].shape)
+    print("Labels shape:", labels.shape)
+    predictions = full_model.predict(inputs)
+    print("Sample prediction shape:", predictions.shape)
+    break  # Stop after the first batch for demonstration purposes
+
+# Create a new generator instance
+train_batched_dataset = batch_generator(tokenized_train_datasets, max_input_length, max_target_length)
+
+# Train the model using the generator
+num_epochs = 2  # Adjust the number of epochs based on your dataset size
+
+# Train the model using the generator
+num_batches_per_epoch = len(tokenized_train_datasets) // batch_size
+
+for epoch in range(num_epochs):
+    print(f"Epoch {epoch + 1}/{num_epochs}")
+    train_batched_dataset = batch_generator(tokenized_train_datasets, max_input_length, max_target_length)
+
+    # Use fit_generator instead of fit
+    full_model.fit(train_batched_dataset, epochs=1, steps_per_epoch=num_batches_per_epoch)
+
+predictions = full_model.predict(inputs)
+
+# Save the model
+tf.keras.models.save_model(full_model, "en-ur_hybrid-500.h5")
+
+# Load the model
+loaded_model = tf.keras.models.load_model("en-ur_hybrid-500.h5")
+
+# The model now takes inputs for CNN, RNN, and the transformer model.
+# The training data generator now yields all required inputs for the model.
+# The model is compiled and trained with the generator.
+
+# you're trying to pass the model_inputs["input_ids"] directly to final_model,
+# but the correct input should include all components (CNN, RNN, and the original input).
+# You need to pass all relevant input tensors to your full_model instead of only final_model.
+# Get the predicted output
+
+# Get the predicted output
+for batch in train_batched_dataset:
+    inputs, labels = batch
+    print("Batch shapes for debugging:")
+    print("CNN input shape:", inputs['cnn_input'].shape)
+    print("RNN input shape:", inputs['rnn_input'].shape)
+    print("Final model input shape:", inputs['final_model_input'].shape)
+    print("Labels shape:", labels.shape)
+    predictions = full_model.predict(inputs)
+    print("Sample prediction shape:", predictions.shape)
+    break  # Stop after the first batch for demonstration purposes
+
+# Get the predicted output
+final_model_output = full_model.predict({
+    "cnn_input": np.expand_dims(padded_en_input, axis=0),
+    "rnn_input": np.expand_dims(padded_en_input, axis=0),
+    "final_model_input": np.expand_dims(padded_ur_target, axis=0),
+})
+
+# The CNN layer expects input in the shape of (batch_size, sequence_length, input_dim).
+# The generator yields inputs for the CNN and RNN components. It should be (batch_size, sequence_length, input_dim).

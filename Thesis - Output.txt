@@ -1,0 +1,40 @@
+tokenizer(sample_input_sentence, max_length=max_input_length, truncation=True)
+{'input_ids': [250004, 3293, 83, 10, 121413, 149357, 100, 134234, 47, 1098, 47691, 5, 2], 'attention_mask': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+Keys of the first example: dict_keys(['en', 'ur', 'input_ids', 'attention_mask', 'labels'])
+Shape of the 'input_ids' tensor for the first example: (17,)
+Sample input_ids: [250004, 3493, 15400, 621, 70, 472, 86, 60096, 98, 935, 7108, 136, 98, 935, 25737, 5, 2]
+Sample labels: [250004, 13361, 14500, 3662, 16509, 1423, 4472, 8756, 778, 7411, 412, 68462, 38734, 37188, 35667, 554, 412, 68462, 6, 10580, 490, 25478, 6356, 3654, 523, 70579, 2379, 14345, 2]
+
+Decoder inputs shape before reshape: (500, 64)
+Decoder inputs shape after reshape: (500, 64)
+Shape of cnn_output: (None, 62, 64)
+Shape of cnn_output_pooled after pooling: (None, 64)
+Shape of cnn_output_pooled: (None, 64)
+Shape of cnn_output_repeated before squeeze: (None, 64, 64, 1)
+Shape of cnn_output_repeated after squeeze: (None, 64, 64, 1)
+Shape of rnn_output: (None, 64)
+Shape of cnn_input: (None, 64, 128)
+Shape of rnn_input_tensor: (None, 64, 64)
+Shape of final_model_input: (None, 64)
+Shapes for debugging:
+Padded English input shape: (500, 64)
+Padded Urdu target shape: (64, 64)
+Shape of cnn_output_reshaped: (None, 64, 64)
+Shape of cnn_output_repeated: (None, 64, 64)
+Shape of rnn_output: (None, 64)
+Shape of rnn_output_reshaped: (None, 64, 64)
+
+Batch shapes for debugging:
+CNN input shape: (1, 64)
+RNN input shape: (1, 64)
+Final model input shape: (1, 64)
+Labels shape: (1, 64)
+Epoch 1/2
+
+WARNING:tensorflow:Model was constructed with shape (None, 64, 128) for input KerasTensor(type_spec=TensorSpec(shape=(None, 64, 128), dtype=tf.float32, name='cnn_input'), name='cnn_input', description="created by layer 'cnn_input'"), but it was called on an input with incompatible shape (None, None).
+WARNING:tensorflow:Model was constructed with shape (None, 64, 64) for input KerasTensor(type_spec=TensorSpec(shape=(None, 64, 64), dtype=tf.float32, name='rnn_input'), name='rnn_input', description="created by layer 'rnn_input'"), but it was called on an input with incompatible shape (None, None).
+
+ValueError: Exception encountered when calling layer "en_text_to_urdu_model" "                 f"(type Functional).
+    
+    Input 0 of layer "lstm" is incompatible with the layer: expected ndim=3, found ndim=2. Full shape received: (None, None)
+        
